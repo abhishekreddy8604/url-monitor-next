@@ -1,6 +1,6 @@
 // src/components/Dashboard.tsx
 'use client'
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { AddUrlForm } from './AddUrlForm';
 import { UrlList } from './UrlList';
 import { TimeDisplay } from './TimeDisplay';
@@ -16,6 +16,29 @@ export interface Url {
  updatedAt: Date;
 }
 
+// Add this function at the top level
+async function checkUrlStatus(url: string): Promise<number> {
+  try {
+    const response = await fetch('/api/check-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to check URL status');
+    }
+    
+    const data = await response.json();
+    return data.status;
+  } catch (error) {
+    console.error('Error checking URL status:', error);
+    return 0; // Return 0 to indicate error
+  }
+}
+
 export function Dashboard() {
  const [urls, setUrls] = useState<Url[]>([]);
  const [loading, setLoading] = useState(true);
@@ -25,35 +48,72 @@ export function Dashboard() {
  const [sortBy, setSortBy] = useState<'name' | 'status' | 'lastChecked'>('lastChecked');
  const [filterStatus, setFilterStatus] = useState<'all' | 'online' | 'offline'>('all');
 
+ const [nextCheckIn, setNextCheckIn] = useState<number>(900);
+
  const fetchUrls = async (showRefreshState = false) => {
-   if (showRefreshState) {
-     setIsRefreshing(true);
-   }
-   try {
-     const response = await fetch('/api/urls');
-     if (!response.ok) {
-       throw new Error('Failed to fetch URLs');
-     }
-     const data = await response.json();
-     setUrls(data);
-     setError(null);
-   } catch (err) {
-     setError(err instanceof Error ? err.message : 'Failed to fetch URLs');
-     console.error('Error fetching URLs:', err);
-   } finally {
-     setLoading(false);
-     if (showRefreshState) {
-       setIsRefreshing(false);
-     }
-   }
- };
+    if (showRefreshState) {
+      setIsRefreshing(true);
+    }
+    
+    try {
+      const response = await fetch('/api/urls');
+      if (!response.ok) throw new Error('Failed to fetch URLs');
+      const data = await response.json();
 
- useEffect(() => {
-   fetchUrls();
-   const interval = setInterval(() => fetchUrls(), 60 * 1000);
-   return () => clearInterval(interval);
- }, []);
+      const updatedUrls = await Promise.all(
+        data.map(async (url: Url) => {
+          const status = await checkUrlStatus(url.url);
+          
+          // Update URL status in database
+          await fetch(`/api/urls/${url.id}/status`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              status,
+              lastChecked: new Date().toISOString(),
+            }),
+          });
 
+          return {
+            ...url,
+            status,
+            lastChecked: new Date(),
+          };
+        })
+      );
+
+      setUrls(updatedUrls);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch URLs');
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    // Update countdown every second
+    const countdownInterval = setInterval(() => {
+      setNextCheckIn((prev) => {
+        if (prev <= 0) {
+          return 900;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  
+    return () => clearInterval(countdownInterval);
+  }, []);
+  
+  useEffect(() => {
+    fetchUrls();
+    // Check URLs every minute instead of 15 minutes for more frequent updates
+    const interval = setInterval(() => fetchUrls(), 60000);
+    return () => clearInterval(interval);
+  }, []);
  const addUrl = async (newUrl: { url: string; name?: string }) => {
    setIsAdding(true);
    setError(null);
@@ -124,10 +184,12 @@ export function Dashboard() {
        {/* Header */}
        <div className="flex justify-between items-center">
          <h1 className="text-3xl font-bold text-black">URL Monitor Dashboard</h1>
-         <TimeDisplay 
-           onRefresh={handleManualRefresh}
-           isRefreshing={isRefreshing}
-         />
+         <Suspense fallback={<div className="text-sm text-gray-500">Loading...</div>}>
+           <TimeDisplay 
+             onRefresh={handleManualRefresh}
+             isRefreshing={isRefreshing}
+           />
+         </Suspense>
        </div>
 
        {/* Statistics */}
@@ -206,9 +268,13 @@ export function Dashboard() {
 
        {/* Footer */}
        <div className="text-center space-y-1">
-         <p className="text-sm text-gray-700 font-medium">URLs are automatically checked every 15 minutes</p>
-         <p className="text-sm text-gray-700 font-medium">Dashboard updates every minute</p>
-       </div>
+  <p className="text-sm text-gray-700 font-medium">
+    URLs are automatically checked every 15 minutes
+  </p>
+  <p className="text-sm text-gray-700 font-medium">
+    Next check in: {Math.floor(nextCheckIn / 60)}m {nextCheckIn % 60}s
+  </p>
+</div>
      </div>
    </div>
  );

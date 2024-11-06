@@ -1,17 +1,21 @@
 // src/app/api/urls/route.ts
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
-import { checkUrlStatus } from '@/utils/checkUrls';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 export async function GET() {
   try {
     const urls = await prisma.url.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: {
+        createdAt: 'desc',
+      },
     });
     return NextResponse.json(urls);
   } catch (error) {
+    console.error('Error fetching URLs:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch URLs' }, 
+      { error: 'Failed to fetch URLs' },
       { status: 500 }
     );
   }
@@ -19,24 +23,18 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const { url, name } = await request.json();
-    
-    // Check URL status immediately
-    const status = await checkUrlStatus(url);
-    
-    const newUrl = await prisma.url.create({
+    const body = await request.json();
+    const url = await prisma.url.create({
       data: {
-        url,
-        name,
-        status,
-        lastChecked: new Date(),
+        url: body.url,
+        name: body.name,
       },
     });
-    
-    return NextResponse.json(newUrl);
+    return NextResponse.json(url);
   } catch (error) {
+    console.error('Error creating URL:', error);
     return NextResponse.json(
-      { error: 'Failed to add URL' }, 
+      { error: 'Failed to create URL' },
       { status: 500 }
     );
   }
